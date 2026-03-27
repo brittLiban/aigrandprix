@@ -1,0 +1,26 @@
+# Physical qualifier / finals overrides
+# Adapter switches to official; real FPS; additional sensor noise expected
+
+adapter:
+  type: "official"
+
+sim:
+  # These are ignored when adapter.type = official, but kept for documentation
+  fps: 60
+  noise_std: 15.0
+
+vision:
+  confidence_ema_alpha: 0.2       # real camera has more jitter
+  confidence_decay_rate: 1.2
+  min_contour_area: 800.0         # larger minimum on real hardware
+
+stability:
+  spike_window_s: 0.3             # tighter spike window for real vibration
+
+state_machine:
+  track_confidence_min: 0.5
+  approach_aligned_min: 0.75
+  lost_gate_s: 0.4                # recover faster; real environment has no "pause"
+
+recovery:
+  lost_gate_s: 0.4

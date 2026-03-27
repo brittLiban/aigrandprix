@@ -1,0 +1,19 @@
+# ml_vision.yaml — switch vision backend to ML detector
+#
+# Stack on top of base.yaml + aggressive.yaml:
+#   python scripts/run_episode.py \
+#     --config configs/base.yaml configs/aggressive.yaml configs/ml_vision.yaml
+#
+# Requires a trained checkpoint at checkpoints/gate_detector.pt
+# Generate: python scripts/gen_dataset.py
+# Train:    python scripts/train_detector.py
+
+vision:
+  backend: "ml"
+  model_path: "checkpoints/gate_detector.pt"
+  ml_input_h: 128
+  ml_input_w: 160
+  ml_conf_threshold: 0.45    # slightly lower than default (0.5) for early detection
+  # EMA and position hold still apply on top
+  confidence_ema_alpha: 0.6
+  position_hold_frames: 4

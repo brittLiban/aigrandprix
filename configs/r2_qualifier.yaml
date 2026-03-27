@@ -1,0 +1,16 @@
+# Round 2 overrides: realistic 3D-scanned env, distractors, higher challenge
+# Vision needs to be more robust; tighten confidence requirements
+
+vision:
+  confidence_ema_alpha: 0.25      # slower to lock on (avoid distractors)
+  confidence_decay_rate: 1.5      # slightly slower decay (more persistence)
+  min_contour_area: 600.0
+
+state_machine:
+  track_confidence_min: 0.5       # need higher confidence before tracking
+  approach_aligned_min: 0.72
+
+sim:
+  noise_std: 12.0
+  drop_frame_prob: 0.02
+  exposure_variation: 0.15

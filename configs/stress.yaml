@@ -1,0 +1,25 @@
+# stress.yaml — harder mock for ceiling validation
+#
+# Stack on top of base.yaml + aggressive.yaml:
+#   python scripts/demo.py --config configs/base.yaml configs/aggressive.yaml configs/stress.yaml
+#
+# Purpose: determine if the policy saturates the *sim mechanics* or just the
+# easy-mode defaults. If completion stays high under these conditions, the
+# mock control problem is genuinely solved and effort should shift to
+# perception/planning improvements.
+#
+# Changes vs base.yaml:
+#   lateral_std:         0.15 → 0.35   gates spawn much further off-center
+#   noise_std:           5.0  → 15.0   strong sensor noise
+#   drop_frame_prob:     0.0  → 0.05   5% frames dropped
+#   latency_spike_prob:  0.0  → 0.03   occasional 20-50ms latency spikes
+#   max_latency_ms:      20.0 → 50.0
+#   exposure_variation:  0.0  → 0.25   lighting flicker
+
+sim:
+  lateral_std: 0.35
+  noise_std: 15.0
+  drop_frame_prob: 0.05
+  latency_spike_prob: 0.0    # disabled — real sleep makes 100-seed runs too slow
+  max_latency_ms: 50.0
+  exposure_variation: 0.25

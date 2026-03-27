@@ -1,0 +1,58 @@
+# aggressive.yaml — charge while aligning, not align then charge
+#
+# Stack on top of base.yaml:
+#   python scripts/run_episode.py --config configs/base.yaml configs/aggressive.yaml
+#   python scripts/demo.py        --config configs/base.yaml configs/aggressive.yaml
+#
+# Philosophy: the old design was "align perfectly, then charge."
+# This is slow. A gate is wide — small misalignment is fine. Charge while
+# correcting. These settings + the fusion.py TRACK/SEARCH logic make that work.
+
+vision:
+  confidence_ema_alpha: 0.6     # react to gate in ~2 frames, was 0.3 (~5 frames)
+  min_contour_area: 150.0       # see gate from distance, was 500
+  position_hold_frames: 4       # hold last known gate position for 4 frames on dropout
+
+state_machine:
+  track_confidence_min: 0.15    # enter TRACK on first real detection, was 0.4
+  approach_aligned_min: 0.75    # gate must be within ~18% of center before charging
+                                 # keeps far-left/right gates in TRACK for roll correction
+  hysteresis_factor: 0.7        # exit APPROACH only if very misaligned
+  commit_area_threshold: 12000.0  # COMMIT at ~scale 0.29, was 40000
+
+controller:
+  push_throttle_step: 0.05      # bigger boost per risk level, was 0.03
+  profiles:
+    TRACK:
+      yaw_kp: 0.6
+      yaw_ki: 0.01
+      yaw_kd: 0.02
+      pitch_kp: 0.7
+      pitch_ki: 0.01
+      pitch_kd: 0.02
+      roll_kp: 0.8              # was 0.3 — needed to saturate roll for far gates
+      roll_ki: 0.0
+      roll_kd: 0.01
+      throttle: 0.60
+    APPROACH:
+      yaw_kp: 0.4
+      yaw_ki: 0.01
+      yaw_kd: 0.02
+      pitch_kp: 0.7
+      pitch_ki: 0.01
+      pitch_kd: 0.02
+      roll_kp: 0.8              # was 0.3 — continue correcting while charging
+      roll_ki: 0.0
+      roll_kd: 0.01
+      throttle: 0.80
+    COMMIT:
+      yaw_kp: 0.3
+      yaw_ki: 0.0
+      yaw_kd: 0.01
+      pitch_kp: 0.8
+      pitch_ki: 0.0
+      pitch_kd: 0.01
+      roll_kp: 0.5              # was 0.2 — small correction through the gate
+      roll_ki: 0.0
+      roll_kd: 0.01
+      throttle: 0.95
