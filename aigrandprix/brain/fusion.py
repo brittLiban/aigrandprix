@@ -11,12 +11,14 @@ Key design choices:
 """
 from __future__ import annotations
 
+import math
 import time
 
+from aigrandprix.brain.planner import GatePlanner
 from aigrandprix.brain.states import DroneState
 from aigrandprix.config import StateMachineConfig
 from aigrandprix.types import (
-    Action, ProgressResult, RecoveryResult, RiskResult,
+    Action, PlannerResult, ProgressResult, RecoveryResult, RiskResult,
     StabilityResult, VisionResult,
 )
 
@@ -31,6 +33,9 @@ class FusionBrain:
         self._t_last: float = 0.0   # sim time of last call
         self._commit_area_peak: float = 0.0
         self._integral_reset_requested: bool = False
+        self._planner = GatePlanner()
+        self._planner_result = PlannerResult(0.5, 0.5, 0.0, 0.0, 0)
+        self._prev_state_was_search = True  # track first TRACK entry per gate
 
     @property
     def state(self) -> DroneState:
@@ -82,10 +87,20 @@ class FusionBrain:
                 self._integral_reset_requested = True
             if new_state == DroneState.COMMIT:
                 self._commit_area_peak = vision.area
+            # Record gate position on first TRACK entry (new gate acquired)
+            if new_state == DroneState.TRACK and prev_state == DroneState.SEARCH:
+                self._planner.record_gate(vision.cx, vision.cy)
+
+        # Update planner prediction every frame
+        self._planner_result = self._planner()
 
         self._state = new_state
         target = self._compute_target(new_state, vision, recovery, risk)
         return new_state, target
+
+    @property
+    def planner_result(self) -> PlannerResult:
+        return self._planner_result
 
     # ------------------------------------------------------------------
     # Transition logic
@@ -175,12 +190,17 @@ class FusionBrain:
     ) -> Action:
         """Compute desired motion as unnormalized targets for the Controller."""
         if state == DroneState.SEARCH:
-            # If we have a direction hint, use it; otherwise sweep yaw sinusoidally
-            # so the drone actively scans instead of hovering.
+            planner = self._planner_result
             if abs(recovery.suggested_yaw) > 0.05:
+                # Recovery hint takes priority — we know which way we lost it
                 yaw = recovery.suggested_yaw * 0.7
+            elif planner.confidence > 0.3:
+                # Planner has enough history — point straight at the prediction,
+                # blended with a slow sweep so we don't get stuck if prediction is wrong
+                bias = planner.search_yaw_hint * planner.confidence
+                sweep = math.sin(self._time_in_state * 0.8) * (1.0 - planner.confidence) * 0.6
+                yaw = bias + sweep
             else:
-                import math
                 yaw = math.sin(self._time_in_state * 1.2) * 0.6
             return Action(roll=0.0, pitch=0.0, yaw=yaw, throttle=0.45)
 
@@ -207,14 +227,20 @@ class FusionBrain:
             )
 
         if state == DroneState.COMMIT:
-            dx = vision.cx - 0.5 if vision.gate_detected else 0.0
-            # Small lateral correction even in COMMIT — don't fly blind
-            return Action(
-                roll=dx * 0.4,
-                pitch=0.25,
-                yaw=-dx * 0.3,
-                throttle=0.85,
-            )
+            planner = self._planner_result
+            if vision.gate_detected:
+                # Still see current gate — correct toward its center
+                dx = vision.cx - 0.5
+                roll = dx * 0.4
+                yaw  = -dx * 0.3
+            elif planner.confidence > 0.3:
+                # Gate just passed — pre-aim toward predicted next gate position
+                pred_dx = planner.predicted_cx - 0.5
+                roll = pred_dx * 1.2   # stronger roll to swing toward next gate
+                yaw  = -pred_dx * 0.5
+            else:
+                roll, yaw = 0.0, 0.0
+            return Action(roll=roll, pitch=0.25, yaw=yaw, throttle=0.85)
 
         if state == DroneState.RECOVER:
             return Action(
@@ -232,3 +258,5 @@ class FusionBrain:
         self._t_last = 0.0
         self._commit_area_peak = 0.0
         self._integral_reset_requested = False
+        self._planner.reset()
+        self._planner_result = PlannerResult(0.5, 0.5, 0.0, 0.0, 0)

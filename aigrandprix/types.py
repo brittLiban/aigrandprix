@@ -110,6 +110,16 @@ class RecoveryResult:
 
 
 @dataclass
+class PlannerResult:
+    """Output of GatePlanner: prediction of next gate position."""
+    predicted_cx: float    # predicted gate center x [0, 1]
+    predicted_cy: float    # predicted gate center y [0, 1]
+    search_yaw_hint: float # suggested initial yaw toward predicted gate [-1, 1]
+    confidence: float      # prediction confidence [0, 1]; 0 = no history
+    gates_seen: int        # total gates acquired so far
+
+
+@dataclass
 class RiskResult:
     """Output of RiskLobe: risk score and aggression scheduling."""
     risk_score: float              # [0, 1]; 0 = safe, 1 = critical
