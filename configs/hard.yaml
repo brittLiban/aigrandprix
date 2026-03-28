@@ -1,0 +1,24 @@
+# hard.yaml — realistic mock sim v2
+#
+# Perspective rendering + textured backgrounds + gate color variation +
+# stress-level sensor noise.  Forces the ML model to generalize beyond
+# the clean white-box-on-gray training distribution.
+#
+# Usage:
+#   python scripts/run_episode.py \
+#     --config configs/base.yaml configs/aggressive.yaml \
+#              configs/ml_vision.yaml configs/hard.yaml
+#
+#   python scripts/demo.py \
+#     --config configs/base.yaml configs/aggressive.yaml \
+#              configs/ml_vision.yaml configs/hard.yaml
+
+sim:
+  render_mode: "perspective"      # perspective-correct gate projection
+  bg_texture: true                # gradient + noise background
+  gate_color: [255, 180, 50]      # orange gate (different from training white)
+  gate_color_jitter: 0.10         # ±10% per-channel color jitter per frame
+  lateral_std: 0.30               # wider gate spread
+  noise_std: 12.0                 # heavier sensor noise
+  exposure_variation: 0.20        # lighting flicker
+  drop_frame_prob: 0.03           # 3% dropped frames

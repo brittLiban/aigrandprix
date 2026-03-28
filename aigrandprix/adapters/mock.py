@@ -24,6 +24,7 @@ Simplified but action-correlated.  dt is always real wall-clock.
 """
 from __future__ import annotations
 
+import math
 import random
 import time
 from typing import Optional
@@ -174,20 +175,10 @@ class MockSimAdapter(AbstractAdapter):
         )
 
     def _render_frame(self, H: int, W: int) -> np.ndarray:
-        frame = np.zeros((H, W, 3), dtype=np.uint8)
-        frame[:] = (20, 20, 20)   # dark gray background
-
-        # Gate as white hollow rectangle
-        gate_w = int(self._gate_scale * W * 0.7)
-        gate_h = int(self._gate_scale * H * 0.7)
-        cx_px = int(self._gate_cx * W)
-        cy_px = int(self._gate_cy * H)
-        x1 = max(0, cx_px - gate_w // 2)
-        y1 = max(0, cy_px - gate_h // 2)
-        x2 = min(W - 1, cx_px + gate_w // 2)
-        y2 = min(H - 1, cy_px + gate_h // 2)
-        thickness = max(2, int(self._gate_scale * 12))
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 255), thickness)
+        if self._cfg.render_mode == "perspective":
+            frame = self._render_perspective(H, W)
+        else:
+            frame = self._render_flat(H, W)
 
         # Gaussian noise
         if self._cfg.noise_std > 0:
@@ -202,6 +193,119 @@ class MockSimAdapter(AbstractAdapter):
                 1.0 + self._cfg.exposure_variation)
             frame = np.clip(frame.astype(np.float32) * factor, 0, 255).astype(np.uint8)
 
+        return frame
+
+    def _gate_color(self) -> tuple:
+        """Return gate color with optional per-frame jitter."""
+        r, g, b = self._cfg.gate_color
+        if self._cfg.gate_color_jitter > 0:
+            j = self._cfg.gate_color_jitter * 255
+            r = int(np.clip(r + self._rng.uniform(-j, j), 0, 255))
+            g = int(np.clip(g + self._rng.uniform(-j, j), 0, 255))
+            b = int(np.clip(b + self._rng.uniform(-j, j), 0, 255))
+        return (b, g, r)   # OpenCV uses BGR
+
+    def _render_background(self, H: int, W: int) -> np.ndarray:
+        """Flat or gradient+texture background."""
+        if not self._cfg.bg_texture:
+            frame = np.full((H, W, 3), 20, dtype=np.uint8)
+            return frame
+
+        # Random gradient: pick two corner colors from a dark palette
+        c1 = int(self._rng.integers(5, 40))
+        c2 = int(self._rng.integers(5, 40))
+        c3 = int(self._rng.integers(5, 40))
+        c4 = int(self._rng.integers(5, 40))
+        # Bilinear gradient across the frame
+        xs = np.linspace(0, 1, W, dtype=np.float32)
+        ys = np.linspace(0, 1, H, dtype=np.float32)
+        xg, yg = np.meshgrid(xs, ys)
+        gray = ((1-xg)*(1-yg)*c1 + xg*(1-yg)*c2 +
+                (1-xg)*yg*c3 + xg*yg*c4).astype(np.uint8)
+        frame = np.stack([gray, gray, gray], axis=2)
+
+        # Add subtle texture noise
+        tex = self._rng.normal(0, 4, (H, W, 3))
+        frame = np.clip(frame.astype(np.int16) + tex.astype(np.int16),
+                        0, 255).astype(np.uint8)
+        return frame
+
+    def _render_flat(self, H: int, W: int) -> np.ndarray:
+        """Original flat rendering: axis-aligned rectangle."""
+        frame = self._render_background(H, W)
+        gate_w = int(self._gate_scale * W * 0.7)
+        gate_h = int(self._gate_scale * H * 0.7)
+        cx_px = int(self._gate_cx * W)
+        cy_px = int(self._gate_cy * H)
+        x1 = max(0, cx_px - gate_w // 2)
+        y1 = max(0, cy_px - gate_h // 2)
+        x2 = min(W - 1, cx_px + gate_w // 2)
+        y2 = min(H - 1, cy_px + gate_h // 2)
+        thickness = max(2, int(self._gate_scale * 12))
+        cv2.rectangle(frame, (x1, y1), (x2, y2), self._gate_color(), thickness)
+        return frame
+
+    def _render_perspective(self, H: int, W: int) -> np.ndarray:
+        """Perspective-correct rendering.
+
+        Models the gate as a physical square at 3D position derived from
+        (cx, cy, scale).  The gate is rotated to face the approach angle,
+        producing a realistic trapezoid when the drone is off-center.
+
+        Coordinate system: camera at origin, +Z forward, +X right, +Y down.
+        """
+        frame = self._render_background(H, W)
+        scale = self._gate_scale
+        cx, cy = self._gate_cx, self._gate_cy
+
+        # 3D gate center — distance ∝ 1/scale
+        gz = 1.0 / max(scale, 1e-3)
+        gx = (cx - 0.5) * 2.0 * gz   # FOV factor = 1 → tan(45°)
+        gy = (cy - 0.5) * 2.0 * gz * (H / W)
+
+        # Gate faces the camera with a yaw/pitch offset proportional to lateral
+        # displacement — simulates off-axis approach angle.
+        yaw_off   = -(cx - 0.5) * 0.9    # radians, max ±0.45
+        pitch_off =  (cy - 0.5) * 0.5
+
+        cy_r, sy_r = math.cos(yaw_off),   math.sin(yaw_off)
+        cp_r, sp_r = math.cos(pitch_off), math.sin(pitch_off)
+
+        # Gate half-size in world units (produces correct screen size at center)
+        hx = 0.35
+        hy = 0.35 * (H / W)
+
+        # 4 corners in gate-local space (gate normal = +Z_local)
+        local = [(-hx, -hy, 0.0),
+                 (+hx, -hy, 0.0),
+                 (+hx, +hy, 0.0),
+                 (-hx, +hy, 0.0)]
+
+        screen_pts = []
+        for (lx, ly, lz) in local:
+            # Yaw rotation (around Y axis)
+            rx  =  lx * cy_r + lz * sy_r
+            rz1 = -lx * sy_r + lz * cy_r
+            # Pitch rotation (around X axis)
+            ry  =  ly * cp_r - rz1 * sp_r
+            rz  =  ly * sp_r + rz1 * cp_r
+
+            # Translate to world position
+            wx, wy, wz = rx + gx, ry + gy, rz + gz
+
+            if wz <= 0.001:
+                screen_pts.append((W // 2, H // 2))
+                continue
+
+            # Pinhole projection → screen pixels
+            sx = int((wx / wz + 1.0) / 2.0 * W)
+            sy = int((wy / wz + 1.0) / 2.0 * H)
+            screen_pts.append((sx, sy))
+
+        pts = np.array(screen_pts, dtype=np.int32).reshape((-1, 1, 2))
+        thickness = max(2, int(scale * 14))
+        cv2.polylines(frame, [pts], isClosed=True,
+                      color=self._gate_color(), thickness=thickness)
         return frame
 
     def _make_accel(self) -> np.ndarray:

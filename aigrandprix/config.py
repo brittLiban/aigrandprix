@@ -38,6 +38,11 @@ class SimConfig:
     latency_spike_prob: float = 0.0
     max_latency_ms: float = 20.0
     exposure_variation: float = 0.0
+    # v2 rendering
+    render_mode: str = "flat"           # "flat" | "perspective"
+    gate_color: list = field(default_factory=lambda: [255, 255, 255])  # RGB
+    bg_texture: bool = False            # gradient + noise background instead of flat gray
+    gate_color_jitter: float = 0.0     # max per-channel jitter [0,1] for gate color variation
 
 
 @dataclass

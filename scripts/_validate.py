@@ -11,6 +11,8 @@ def run_episode(args):
     from aigrandprix.config import default_config, load_config
     from aigrandprix.runner import PipelineRunner
     cfg = default_config() if not config_paths else load_config(*config_paths)
+    cfg.logging.flush_every_n_steps = 999999  # suppress frequent flushes
+    cfg.logging.output_dir = ""               # empty = no log file written
     s = PipelineRunner(cfg).run(seed=seed)
     return label, s["lap_time"], s["completion"], s["recovery_events"]
 
@@ -26,6 +28,8 @@ def main():
         ("HSV+STRESS",   ["configs/base.yaml", "configs/aggressive.yaml", "configs/stress.yaml"]),
         ("ML+AGG",       ["configs/base.yaml", "configs/aggressive.yaml", "configs/ml_vision.yaml"]),
         ("ML+STRESS",    ["configs/base.yaml", "configs/aggressive.yaml", "configs/stress.yaml", "configs/ml_vision.yaml"]),
+        ("HSV+HARD",     ["configs/base.yaml", "configs/aggressive.yaml", "configs/hard.yaml"]),
+        ("ML+HARD",      ["configs/base.yaml", "configs/aggressive.yaml", "configs/ml_vision.yaml", "configs/hard.yaml"]),
     ]
 
     tasks = [
@@ -34,7 +38,9 @@ def main():
         for seed in SEEDS
     ]
 
-    n_workers = max(1, mp.cpu_count() - 1)
+    # ML workers load CUDA torch — cap to avoid paging file exhaustion
+    has_ml = any("ml_vision" in str(paths) for _, paths in configs)
+    n_workers = 4 if has_ml else max(1, mp.cpu_count() - 1)
     print(f"Running {len(tasks)} episodes across {n_workers} workers...", flush=True)
 
     results: dict[str, list] = {label: [] for label, _ in configs}

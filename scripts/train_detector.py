@@ -95,16 +95,15 @@ def train(
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}")
 
-    # Dataset
-    stats = dataset_stats(data_dir)
-    print(f"Dataset: {stats['total']} frames  "
+    # Dataset — support comma-separated list of roots
+    roots = [d.strip() for d in data_dir.split(",") if d.strip()]
+    data_arg = roots if len(roots) > 1 else roots[0]
+    stats = dataset_stats(roots[0])
+    print(f"Dataset: {stats['total']} frames from {len(roots)} source(s)  "
           f"({100*stats['pos_frac']:.1f}% positive)")
-
-    # Dataset was pre-augmented at gen time — disable runtime augmentation
-    # to eliminate the CPU bottleneck (was causing 270s/epoch on a 3060 Ti).
-    train_ds = GateDataset(data_dir, input_h=input_h, input_w=input_w,
+    train_ds = GateDataset(data_arg, input_h=input_h, input_w=input_w,
                            augment=False, split="train")
-    val_ds   = GateDataset(data_dir, input_h=input_h, input_w=input_w,
+    val_ds   = GateDataset(data_arg, input_h=input_h, input_w=input_w,
                            augment=False, split="val")
 
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,

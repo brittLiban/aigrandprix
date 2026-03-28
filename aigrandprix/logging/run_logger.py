@@ -92,6 +92,8 @@ class RunLogger:
         self._step_count = 0
 
     def open(self) -> None:
+        if not self._cfg.output_dir:
+            return  # logging disabled (empty output_dir)
         out_dir = Path(self._cfg.output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         self._path = out_dir / f"{self._run_id}.jsonl"

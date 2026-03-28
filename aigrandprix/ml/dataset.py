@@ -36,7 +36,9 @@ class GateDataset(Dataset):
     """PyTorch Dataset for gate detection frames.
 
     Args:
-        root:     Path to dataset root (contains images/ and labels.jsonl).
+        root:     Path (or list of paths) to dataset root(s).
+                  Each root must contain images/ and labels.jsonl.
+                  Multiple roots are merged — no file copying required.
         input_h:  Resize height for model input.
         input_w:  Resize width for model input.
         augment:  If True, apply random photometric augmentation.
@@ -45,23 +47,35 @@ class GateDataset(Dataset):
 
     def __init__(
         self,
-        root: str | Path,
+        root: str | Path | list,
         input_h: int = 128,
         input_w: int = 160,
         augment: bool = False,
         split: str = "all",
     ):
-        self.root = Path(root)
         self.input_h = input_h
         self.input_w = input_w
         self.augment = augment
 
-        labels_path = self.root / "labels.jsonl"
-        if not labels_path.exists():
-            raise FileNotFoundError(f"labels.jsonl not found in {root}")
+        # Support single root or list of roots
+        roots = [root] if not isinstance(root, list) else root
+        roots = [Path(r) for r in roots]
 
-        with open(labels_path) as f:
-            all_rows = [json.loads(line) for line in f if line.strip()]
+        all_rows = []
+        for r in roots:
+            labels_path = r / "labels.jsonl"
+            if not labels_path.exists():
+                raise FileNotFoundError(f"labels.jsonl not found in {r}")
+            with open(labels_path) as f:
+                for line in f:
+                    if line.strip():
+                        row = json.loads(line)
+                        # Store absolute file path so we don't need the root later
+                        row["_abs_file"] = str(r / row["file"])
+                        all_rows.append(row)
+
+        # Keep root for backward compat (single root case)
+        self.root = roots[0]
 
         # Deterministic split: last 15% → val
         n_val = max(1, int(len(all_rows) * 0.15))
@@ -81,7 +95,7 @@ class GateDataset(Dataset):
         print(f"  Loading {len(self.rows)} images into RAM...", end=" ", flush=True)
         self._cache: list = [None] * len(self.rows)
         for i, row in enumerate(self.rows):
-            img_path = self.root / row["file"]
+            img_path = row.get("_abs_file", str(self.root / row["file"]))
             img_bgr = cv2.imread(str(img_path))
             if img_bgr is None:
                 img_bgr = np.zeros((self.input_h, self.input_w, 3), dtype=np.uint8)
@@ -94,7 +108,6 @@ class GateDataset(Dataset):
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         row = self.rows[idx]
-        img_path = self.root / row["file"]
 
         img_rgb = self._cache[idx]
 
