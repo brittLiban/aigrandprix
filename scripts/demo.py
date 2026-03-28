@@ -30,6 +30,7 @@ from aigrandprix.lobes.recovery import RecoveryLobe
 from aigrandprix.lobes.risk import RiskLobe
 from aigrandprix.lobes.stability import StabilityLobe
 from aigrandprix.lobes.vision import VisionLobe
+from aigrandprix.lobes.vision_ml import MLVisionLobe
 from aigrandprix.types import Action, Observation, VisionResult
 
 # ── Layout constants ──────────────────────────────────────────────────────────
@@ -78,6 +79,7 @@ class DemoState:
     action:       Action = field(default_factory=Action.zero)
     fpv_frame:    Optional[np.ndarray] = None   # latest RGB frame from adapter
     bbox:         Optional[tuple]      = None   # (x,y,w,h) or None
+    bbox_smooth:  Optional[list]       = None   # EMA-smoothed bbox for display
     # rolling history for action bars (last 60 frames)
     roll_hist:     list[float] = field(default_factory=list)
     pitch_hist:    list[float] = field(default_factory=list)
@@ -110,12 +112,13 @@ class DemoVisualizer:
         else:
             view = np.zeros((FPV_H, FPV_W, 3), dtype=np.uint8)
 
-        # Gate bounding box
-        if ds.bbox is not None:
-            x, y, w, h = ds.bbox
+        # Gate bounding box (use smoothed coords to reduce jitter)
+        if ds.bbox_smooth is not None:
+            x, y, w, h = ds.bbox_smooth
             # scale from original image coords to FPV_W×FPV_H
             orig_h, orig_w = (ds.fpv_frame.shape[:2]
                               if ds.fpv_frame is not None else (FPV_H, FPV_W))
+
             sx = FPV_W / orig_w
             sy = FPV_H / orig_h
             px, py = int(x * sx), int(y * sy)
@@ -319,7 +322,11 @@ class DemoRunner:
         self._adapter = MockSimAdapter(config.sim)
 
         # Build lobes
-        self._vision    = VisionLobe(config.vision,
+        if config.vision.backend == "ml":
+            self._vision = MLVisionLobe(config.vision,
+                                        budget_ms=config.lobes.vision.budget_ms)
+        else:
+            self._vision = VisionLobe(config.vision,
                                       budget_ms=config.lobes.vision.budget_ms)
         self._stability = StabilityLobe(config.stability,
                                          budget_ms=config.lobes.stability.budget_ms)
@@ -393,6 +400,15 @@ class DemoRunner:
                 ds.action        = action
                 ds.fpv_frame     = obs.image
                 ds.bbox          = vision_r.bbox
+                # EMA-smooth bbox for display (reduces jitter)
+                if vision_r.bbox is not None:
+                    if ds.bbox_smooth is None:
+                        ds.bbox_smooth = list(vision_r.bbox)
+                    else:
+                        ds.bbox_smooth = [0.6 * s + 0.4 * n
+                                          for s, n in zip(ds.bbox_smooth, vision_r.bbox)]
+                else:
+                    ds.bbox_smooth = None
                 ds.roll_hist.append(action.roll)
                 ds.pitch_hist.append(action.pitch)
                 ds.throttle_hist.append(action.throttle)
