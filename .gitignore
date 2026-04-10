@@ -17,6 +17,5 @@ venv/
 *.avi
 sweep_results/
 data/
-checkpoints/
 checkpoints_test/
 .claude/
