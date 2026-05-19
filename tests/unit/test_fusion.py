@@ -117,7 +117,9 @@ class TestFusionBrainTransitions:
     def test_any_state_to_recover_on_long_gate_loss(self):
         brain = FusionBrain(default_config().state_machine)
         cfg = default_config().state_machine
+        # Gate is truly lost: time exceeded AND EMA is cold (not just a sensor glitch)
         state, _ = step(brain,
+                        v=vision(ema=0.0),
                         r=recovery(frames_since=cfg.search_timeout_s + 1.0),
                         t=0.1)
         assert state == DroneState.RECOVER

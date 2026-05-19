@@ -72,7 +72,7 @@ class VisionConfig:
     # ML backend
     backend: str = "hsv"                 # "hsv" | "ml"
     model_path: str = ""                 # path to trained .pt checkpoint
-    ml_input_h: int = 128                # resize height fed to ML model
+    ml_input_h: int = 90                 # 90×160 = 16:9, matches 640×360 camera
     ml_input_w: int = 160                # resize width fed to ML model
     ml_conf_threshold: float = 0.5       # detection sigmoid threshold
 
@@ -88,6 +88,10 @@ class StabilityConfig:
 class ProgressConfig:
     area_ema_alpha: float = 0.3
     min_progress_rate: float = 0.02
+    # Camera upward tilt shifts the "centered" gate cy above 0.5.
+    # Set to tan(tilt_deg) * fy / image_H / 2 for the competition camera.
+    # Official cam: tan(20°)*320/360 ≈ 0.323 (level), ~0.15 at cruising pitch.
+    cy_tilt_offset: float = 0.0
 
 
 @dataclass
@@ -170,6 +174,29 @@ class LoggingConfig:
     save_video_snippets: bool = False
 
 
+@dataclass
+class OfficialAdapterConfig:
+    # MAVLink connection string — see pymavlink docs.
+    # "udpin:0.0.0.0:PORT"  listens on PORT (sim sends to us)
+    # "udpout:HOST:PORT"     connects to sim at HOST:PORT
+    mavlink_connection: str = "udpin:0.0.0.0:14551"
+    vision_host: str = "0.0.0.0"
+    vision_port: int = 5600
+    target_system: int = 1      # MAVLink target system ID
+    target_component: int = 1   # MAVLink target component ID
+    connect_timeout_s: float = 20.0
+    heartbeat_rate_hz: float = 4.0   # spec requires ≥ 2 Hz
+    vision_recv_timeout_s: float = 2.0
+    max_run_s: float = 480.0         # 8-minute race limit
+    # Body-rate scaling: Action [-1, 1] → rad/s sent to SET_ATTITUDE_TARGET
+    max_roll_rate_rad_s: float = 6.0    # ~344 deg/s
+    max_pitch_rate_rad_s: float = 6.0
+    max_yaw_rate_rad_s: float = 4.0     # ~229 deg/s
+    # Camera is tilted 20° upward from body forward (spec §3.8).
+    # Exposed in obs.meta so the pipeline can correct cy offsets if needed.
+    camera_tilt_deg: float = 20.0
+
+
 # ---------------------------------------------------------------------------
 # Root config
 # ---------------------------------------------------------------------------
@@ -178,6 +205,7 @@ class LoggingConfig:
 class Config:
     adapter: AdapterConfig = field(default_factory=AdapterConfig)
     sim: SimConfig = field(default_factory=SimConfig)
+    official: OfficialAdapterConfig = field(default_factory=OfficialAdapterConfig)
     pipeline: PipelineConfig = field(default_factory=PipelineConfig)
     lobes: LobesConfig = field(default_factory=LobesConfig)
     vision: VisionConfig = field(default_factory=VisionConfig)

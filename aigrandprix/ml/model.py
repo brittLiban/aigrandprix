@@ -39,11 +39,11 @@ class GateDetector(nn.Module):
     """Tiny gate detector.
 
     Args:
-        input_h: Expected input height (default 128).
+        input_h: Expected input height (default 90 — matches 640×360 camera at 16:9).
         input_w: Expected input width (default 160).
     """
 
-    def __init__(self, input_h: int = 128, input_w: int = 160):
+    def __init__(self, input_h: int = 90, input_w: int = 160):
         super().__init__()
         self.input_h = input_h
         self.input_w = input_w
@@ -107,34 +107,48 @@ class GateDetector(nn.Module):
 
 
 def gate_loss(pred: torch.Tensor, labels: torch.Tensor,
-              bbox_weight: float = 5.0) -> tuple[torch.Tensor, dict]:
+              bbox_weight: float = 5.0,
+              center_weight: float = 3.0) -> tuple[torch.Tensor, dict]:
     """Combined detection + bbox regression loss.
 
     Args:
-        pred:   (B, 5) model output — [det_logit, cx, cy, bw, bh].
-        labels: (B, 5) ground truth — [det_float, cx, cy, bw, bh].
-                det_float is 1.0 for present, 0.0 for absent.
-        bbox_weight: Weight for bbox loss relative to detection loss.
+        pred:          (B, 5) model output — [det_logit, cx, cy, bw, bh].
+        labels:        (B, 5) ground truth — [det_float, cx, cy, bw, bh].
+                       det_float is 1.0 for present, 0.0 for absent.
+        bbox_weight:   Overall weight for bbox loss vs. detection loss.
+        center_weight: Extra weight on cx/cy relative to bw/bh.
+                       Gates are 1500mm wide; a centering error kills the run,
+                       a size error just makes the drone commit slightly earlier.
 
     Returns:
-        (total_loss, {"det": ..., "bbox": ...})
+        (total_loss, {"det": ..., "center": ..., "size": ...})
     """
-    det_pred  = pred[:, 0]         # raw logit
-    det_label = labels[:, 0]       # 0 or 1
+    det_pred  = pred[:, 0]
+    det_label = labels[:, 0]
 
     det_loss = nn.functional.binary_cross_entropy_with_logits(
         det_pred, det_label, reduction="mean"
     )
 
-    # Bbox loss only on positive (gate present) samples
     pos_mask = det_label > 0.5
     if pos_mask.any():
-        bbox_pred  = pred[pos_mask, 1:]     # (N+, 4)
-        bbox_label = labels[pos_mask, 1:]   # (N+, 4)
-        bbox_loss = nn.functional.smooth_l1_loss(bbox_pred, bbox_label,
-                                                 reduction="mean")
+        bbox_pred  = pred[pos_mask, 1:]     # (N+, 4): [cx, cy, bw, bh]
+        bbox_label = labels[pos_mask, 1:]
+
+        # Center error (cx, cy) weighted more heavily than size (bw, bh)
+        center_loss = nn.functional.smooth_l1_loss(
+            bbox_pred[:, :2], bbox_label[:, :2], reduction="mean"
+        )
+        size_loss = nn.functional.smooth_l1_loss(
+            bbox_pred[:, 2:], bbox_label[:, 2:], reduction="mean"
+        )
+        bbox_loss = center_weight * center_loss + size_loss
     else:
-        bbox_loss = torch.tensor(0.0, device=pred.device)
+        center_loss = size_loss = bbox_loss = torch.tensor(0.0, device=pred.device)
 
     total = det_loss + bbox_weight * bbox_loss
-    return total, {"det": det_loss.item(), "bbox": bbox_loss.item()}
+    return total, {
+        "det":    det_loss.item(),
+        "center": center_loss.item() if pos_mask.any() else 0.0,
+        "size":   size_loss.item()   if pos_mask.any() else 0.0,
+    }

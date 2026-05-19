@@ -66,7 +66,7 @@ def jpeg_artifacts(image: np.ndarray, rng: np.random.Generator,
 
 def random_occlusion(image: np.ndarray, rng: np.random.Generator,
                      max_rect_fraction: float = 0.2) -> np.ndarray:
-    """Add a random dark rectangle (occlusion)."""
+    """Add a random dark rectangle (occlusion / cutout)."""
     H, W = image.shape[:2]
     rw = int(rng.uniform(0.05, max_rect_fraction) * W)
     rh = int(rng.uniform(0.05, max_rect_fraction) * H)
@@ -85,6 +85,40 @@ def gaussian_noise(image: np.ndarray, rng: np.random.Generator,
     return np.clip(image.astype(np.float32) + noise, 0, 255).astype(np.uint8)
 
 
+def color_jitter(image: np.ndarray, rng: np.random.Generator,
+                 hue_shift: float = 15.0,
+                 sat_scale: tuple = (0.5, 1.5)) -> np.ndarray:
+    """Shift hue and scale saturation — makes gate color-agnostic.
+
+    Critical for generalization to real sim where gate color is unknown.
+    """
+    hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV).astype(np.float32)
+    # Hue shift (wraps around 180)
+    hsv[:, :, 0] = (hsv[:, :, 0] + rng.uniform(-hue_shift, hue_shift)) % 180
+    # Saturation scale
+    hsv[:, :, 1] = np.clip(hsv[:, :, 1] * rng.uniform(*sat_scale), 0, 255)
+    return cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2RGB)
+
+
+def cutout(image: np.ndarray, rng: np.random.Generator,
+           n_holes: int = 2, max_size: float = 0.15) -> np.ndarray:
+    """Erase N random patches with mean-fill (Cutout regularization).
+
+    Mean-fill is less disruptive than zero-fill and helps the model attend
+    to the full gate shape rather than individual bright edges.
+    """
+    H, W = image.shape[:2]
+    out = image.copy().astype(np.float32)
+    mean_val = out.mean(axis=(0, 1))
+    for _ in range(n_holes):
+        rw = int(rng.uniform(0.05, max_size) * W)
+        rh = int(rng.uniform(0.05, max_size) * H)
+        x = int(rng.integers(0, max(1, W - rw)))
+        y = int(rng.integers(0, max(1, H - rh)))
+        out[y:y + rh, x:x + rw] = mean_val
+    return out.astype(np.uint8)
+
+
 # ---------------------------------------------------------------------------
 # Registry and dispatch
 # ---------------------------------------------------------------------------
@@ -96,6 +130,8 @@ _TRANSFORMS = {
     "jpeg": jpeg_artifacts,
     "occlusion": random_occlusion,
     "noise": gaussian_noise,
+    "color_jitter": color_jitter,
+    "cutout": cutout,
 }
 
 ALL_TRANSFORMS = list(_TRANSFORMS.keys())

@@ -88,3 +88,35 @@ class TestProgressLobe:
         lobe.reset()
         assert lobe._gate_index == 0
         assert lobe._prev_area == 0.0
+
+    def test_cy_tilt_offset_zero_default(self):
+        """Default config: cy_tilt_offset=0, gate at 0.5 gives dy≈0."""
+        cfg = default_config()
+        assert cfg.progress.cy_tilt_offset == 0.0
+        lobe = ProgressLobe(cfg.progress)
+        result = lobe(make_obs(), gate_at(0.5, 0.5), DroneState.TRACK, 0.1)
+        assert abs(result.dy) < 0.05
+
+    def test_cy_tilt_offset_shifts_centered_dy(self):
+        """With cy_tilt_offset=0.16, gate at cy=0.66 should give dy≈0."""
+        from aigrandprix.config import ProgressConfig
+        cfg = ProgressConfig(cy_tilt_offset=0.16)
+        lobe = ProgressLobe(cfg)
+        # Gate at cy=0.66 = 0.5 + 0.16 → should be "centered" → dy ≈ 0
+        result = lobe(make_obs(), gate_at(0.5, 0.66), DroneState.TRACK, 0.1)
+        assert abs(result.dy) < 0.05
+
+    def test_cy_tilt_offset_improves_aligned_score(self):
+        """With camera tilt, a gate at cy=0.66 should score higher with offset than without."""
+        from aigrandprix.config import ProgressConfig
+        lobe_no_offset  = ProgressLobe(ProgressConfig(cy_tilt_offset=0.0))
+        lobe_with_offset = ProgressLobe(ProgressConfig(cy_tilt_offset=0.16))
+        gate = gate_at(0.5, 0.66)  # gate below center due to camera tilt
+
+        result_no  = lobe_no_offset(make_obs(), gate, DroneState.TRACK, 0.1)
+        result_yes = lobe_with_offset(make_obs(), gate, DroneState.TRACK, 0.1)
+
+        # With offset, dy≈0 → aligned_score close to 1.0
+        # Without offset, dy>0 → aligned_score lower
+        assert result_yes.aligned_score > result_no.aligned_score
+        assert result_yes.aligned_score > 0.95

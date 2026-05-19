@@ -1,0 +1,108 @@
+# Official sim config for Round 1 Qualifier
+# Spec: VADR-TS-002 Issue 00.02 — gate outer 2700x2700mm, inner 1500x1500mm
+# Camera: 640x360, fx=fy=320, tilted 20° upward from body forward
+# Run with: python scripts/compete.py
+
+adapter:
+  type: "official"
+
+official:
+  mavlink_connection: "udpin:0.0.0.0:14551"
+  vision_host: "0.0.0.0"
+  vision_port: 5600
+  connect_timeout_s: 20.0
+  heartbeat_rate_hz: 4.0      # spec requires >= 2 Hz
+  max_run_s: 480.0            # 8-minute hard limit (spec §8.3)
+  max_roll_rate_rad_s: 6.0
+  max_pitch_rate_rad_s: 6.0
+  max_yaw_rate_rad_s: 4.0
+  camera_tilt_deg: 20.0
+
+vision:
+  backend: "ml"
+  model_path: "models/gate_detector.pt"
+  ml_input_h: 90    # 90x160 = 16:9 matches real camera 360x640
+  ml_input_w: 160
+  ml_conf_threshold: 0.45     # slightly lower for early acquisition
+  resize_h: 180               # half of real camera height
+  resize_w: 320
+  confidence_ema_alpha: 0.4   # respond a bit faster
+  confidence_decay_rate: 2.5  # decay a bit faster so lost gates don't hold
+  position_hold_frames: 3     # hold last known gate for 3 frames on brief dropout
+
+progress:
+  area_ema_alpha: 0.35
+  # Camera tilted 20° up; at cruising pitch (~10° forward) net ≈ 10° upward.
+  # Gate "center" appears at cy ≈ 0.66 rather than 0.5.
+  # Tune this UP if drone struggles to enter APPROACH; DOWN if it overshoots vertically.
+  cy_tilt_offset: 0.16
+
+state_machine:
+  track_confidence_min: 0.35  # enter TRACK earlier
+  approach_aligned_min: 0.60  # slightly more forgiving for tilt residual
+  commit_area_threshold: 30000.0  # commit at ~2.8m from gate inner
+  search_timeout_s: 2.5       # give up SEARCH faster
+  approach_timeout_s: 2.5
+
+sim:
+  fps: 30
+
+controller:
+  integral_clamp: 0.3
+  push_throttle_step: 0.05    # each push level = +5% throttle (was 3%)
+  profiles:
+    SEARCH:
+      yaw_kp: 0.7
+      yaw_ki: 0.0
+      yaw_kd: 0.02
+      pitch_kp: 0.2
+      pitch_ki: 0.0
+      pitch_kd: 0.01
+      roll_kp: 0.2
+      roll_ki: 0.0
+      roll_kd: 0.01
+      throttle: 0.50           # was 0.40 — maintain altitude while searching
+    TRACK:
+      yaw_kp: 0.5
+      yaw_ki: 0.01
+      yaw_kd: 0.02
+      pitch_kp: 0.45
+      pitch_ki: 0.01
+      pitch_kd: 0.02
+      roll_kp: 0.35
+      roll_ki: 0.0
+      roll_kd: 0.01
+      throttle: 0.60           # was 0.50 — faster approach while tracking
+    APPROACH:
+      yaw_kp: 0.4
+      yaw_ki: 0.01
+      yaw_kd: 0.02
+      pitch_kp: 0.65
+      pitch_ki: 0.01
+      pitch_kd: 0.02
+      roll_kp: 0.35
+      roll_ki: 0.0
+      roll_kd: 0.01
+      throttle: 0.75           # was 0.65 — aggressive approach
+    COMMIT:
+      yaw_kp: 0.2
+      yaw_ki: 0.0
+      yaw_kd: 0.01
+      pitch_kp: 0.8
+      pitch_ki: 0.0
+      pitch_kd: 0.01
+      roll_kp: 0.2
+      roll_ki: 0.0
+      roll_kd: 0.01
+      throttle: 0.92           # was 0.85 — full send through gate
+    RECOVER:
+      yaw_kp: 0.8
+      yaw_ki: 0.0
+      yaw_kd: 0.03
+      pitch_kp: 0.1
+      pitch_ki: 0.0
+      pitch_kd: 0.01
+      roll_kp: 0.1
+      roll_ki: 0.0
+      roll_kd: 0.01
+      throttle: 0.50           # was 0.35 — maintain altitude during recovery!

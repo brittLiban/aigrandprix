@@ -43,37 +43,41 @@ from aigrandprix.ml.dataset import GateDataset, dataset_stats
 # ---------------------------------------------------------------------------
 
 def evaluate(model: GateDetector, loader: DataLoader,
-             device: str, conf_threshold: float = 0.5) -> dict:
-    """Compute val metrics: loss, det accuracy, bbox MAE (positive only)."""
+             device: str, conf_threshold: float = 0.5,
+             bbox_weight: float = 5.0, center_weight: float = 3.0) -> dict:
+    """Compute val metrics: loss, det accuracy, center MAE, size MAE."""
     model.eval()
-    total_loss = det_correct = n_total = n_pos = bbox_mae = 0.0
+    total_loss = det_correct = n_total = n_pos = 0.0
+    center_mae = size_mae = 0.0
 
     with torch.no_grad():
         for images, labels in loader:
             images = images.to(device)
             labels = labels.to(device)
             pred = model(images)
-            loss, _ = gate_loss(pred, labels)
+            loss, _ = gate_loss(pred, labels,
+                                bbox_weight=bbox_weight,
+                                center_weight=center_weight)
             total_loss += loss.item() * images.shape[0]
 
-            # Detection accuracy
             det_pred  = (torch.sigmoid(pred[:, 0]) >= conf_threshold).float()
             det_label = (labels[:, 0] >= 0.5).float()
             det_correct += (det_pred == det_label).sum().item()
             n_total += images.shape[0]
 
-            # Bbox MAE on positive samples
             pos_mask = det_label > 0.5
             if pos_mask.any():
-                bbox_pred  = pred[pos_mask, 1:]
-                bbox_label = labels[pos_mask, 1:]
-                bbox_mae += (bbox_pred - bbox_label).abs().mean().item() * pos_mask.sum().item()
+                bp = pred[pos_mask, 1:]
+                bl = labels[pos_mask, 1:]
+                center_mae += (bp[:, :2] - bl[:, :2]).abs().mean().item() * pos_mask.sum().item()
+                size_mae   += (bp[:, 2:] - bl[:, 2:]).abs().mean().item() * pos_mask.sum().item()
                 n_pos += pos_mask.sum().item()
 
     return {
-        "loss": total_loss / max(n_total, 1),
-        "det_acc": det_correct / max(n_total, 1),
-        "bbox_mae": bbox_mae / max(n_pos, 1),
+        "loss":       total_loss / max(n_total, 1),
+        "det_acc":    det_correct / max(n_total, 1),
+        "center_mae": center_mae / max(n_pos, 1),
+        "size_mae":   size_mae   / max(n_pos, 1),
     }
 
 
@@ -91,18 +95,20 @@ def train(
     checkpoint_dir: str,
     resume: str,
     num_workers: int,
+    bbox_weight: float,
+    center_weight: float,
 ) -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}")
 
-    # Dataset — support comma-separated list of roots
     roots = [d.strip() for d in data_dir.split(",") if d.strip()]
     data_arg = roots if len(roots) > 1 else roots[0]
     stats = dataset_stats(roots[0])
     print(f"Dataset: {stats['total']} frames from {len(roots)} source(s)  "
           f"({100*stats['pos_frac']:.1f}% positive)")
+    # augment=True: per-epoch random flip + photometric transforms (not fixed copies)
     train_ds = GateDataset(data_arg, input_h=input_h, input_w=input_w,
-                           augment=False, split="train")
+                           augment=True, split="train")
     val_ds   = GateDataset(data_arg, input_h=input_h, input_w=input_w,
                            augment=False, split="val")
 
@@ -140,8 +146,8 @@ def train(
 
     history = []
     print(f"\n{'Epoch':>6}  {'Train Loss':>10}  {'Val Loss':>9}  "
-          f"{'Det Acc':>8}  {'BBox MAE':>9}  {'Time':>6}")
-    print("-" * 60)
+          f"{'Det Acc':>8}  {'Center MAE':>10}  {'Size MAE':>9}  {'Time':>6}")
+    print("-" * 70)
 
     for epoch in range(start_epoch, start_epoch + epochs):
         model.train()
@@ -153,13 +159,17 @@ def train(
             labels = labels.to(device)
             optimizer.zero_grad()
             pred = model(images)
-            loss, _ = gate_loss(pred, labels)
+            loss, _ = gate_loss(pred, labels,
+                                bbox_weight=bbox_weight,
+                                center_weight=center_weight)
             loss.backward()
             optimizer.step()
             train_loss += loss.item() * images.shape[0]
 
         train_loss /= max(len(train_ds), 1)
-        val_metrics = evaluate(model, val_loader, device)
+        val_metrics = evaluate(model, val_loader, device,
+                               bbox_weight=bbox_weight,
+                               center_weight=center_weight)
         scheduler.step()
 
         elapsed = time.perf_counter() - t0
@@ -179,7 +189,8 @@ def train(
         print(f"{epoch+1:>6}  {train_loss:>10.4f}  "
               f"{val_metrics['loss']:>9.4f}  "
               f"{val_metrics['det_acc']:>8.4f}  "
-              f"{val_metrics['bbox_mae']:>9.4f}  "
+              f"{val_metrics['center_mae']:>10.4f}  "
+              f"{val_metrics['size_mae']:>9.4f}  "
               f"{elapsed:>5.1f}s"
               + (" *" if is_best else ""), flush=True)
 
@@ -230,16 +241,20 @@ def main() -> None:
                         help="Batch size (default: 512)")
     parser.add_argument("--lr", type=float, default=1e-3,
                         help="Learning rate (default: 0.001)")
-    parser.add_argument("--input-h", type=int, default=128,
-                        help="Model input height (default: 128)")
+    parser.add_argument("--input-h", type=int, default=90,
+                        help="Model input height (default: 90 — 16:9 for 640×360 camera)")
     parser.add_argument("--input-w", type=int, default=160,
                         help="Model input width (default: 160)")
-    parser.add_argument("--checkpoint-dir", default="checkpoints",
-                        help="Where to save checkpoints (default: checkpoints/)")
+    parser.add_argument("--checkpoint-dir", default="models",
+                        help="Where to save checkpoints (default: models/)")
     parser.add_argument("--resume", default="",
                         help="Resume from a checkpoint file")
     parser.add_argument("--num-workers", type=int, default=0,
                         help="DataLoader worker processes (default: 0)")
+    parser.add_argument("--bbox-weight", type=float, default=5.0,
+                        help="Overall bbox loss weight vs. detection (default: 5.0)")
+    parser.add_argument("--center-weight", type=float, default=3.0,
+                        help="Extra weight on cx/cy vs bw/bh (default: 3.0)")
     args = parser.parse_args()
 
     train(
@@ -252,6 +267,8 @@ def main() -> None:
         checkpoint_dir=args.checkpoint_dir,
         resume=args.resume,
         num_workers=args.num_workers,
+        bbox_weight=args.bbox_weight,
+        center_weight=args.center_weight,
     )
 
 

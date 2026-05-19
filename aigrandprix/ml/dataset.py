@@ -108,21 +108,23 @@ class GateDataset(Dataset):
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         row = self.rows[idx]
+        img_rgb = self._cache[idx].copy()
 
-        img_rgb = self._cache[idx]
+        cx = float(row["cx"])
+        cy = float(row["cy"])
 
-        # Optional photometric augmentation (training only)
+        # Augmentation: geometric (flip) + photometric — applied per-epoch so
+        # the model sees different variations on each pass through the data.
         if self.augment:
-            img_rgb = self._augment(img_rgb)
+            img_rgb, cx = self._augment(img_rgb, cx)
 
         # (H, W, 3) uint8 → (3, H, W) float32 in [0, 1]
-        tensor = torch.from_numpy(img_rgb).permute(2, 0, 1).float() / 255.0
+        tensor = torch.from_numpy(np.ascontiguousarray(img_rgb)).permute(2, 0, 1).float() / 255.0
 
         # Label: [det, cx, cy, bw, bh]
-        det = 1.0 if row["gate_detected"] else 0.0
         if row["gate_detected"]:
             label = torch.tensor(
-                [det, row["cx"], row["cy"], row["bw"], row["bh"]], dtype=torch.float32
+                [1.0, cx, cy, row["bw"], row["bh"]], dtype=torch.float32
             )
         else:
             label = torch.tensor([0.0, 0.5, 0.5, 0.0, 0.0], dtype=torch.float32)
@@ -133,19 +135,41 @@ class GateDataset(Dataset):
     # Augmentation
     # ------------------------------------------------------------------
 
-    def _augment(self, img: np.ndarray) -> np.ndarray:
-        """Light photometric augmentation (no geometric — preserves labels)."""
+    def _augment(self, img: np.ndarray, cx: float) -> tuple[np.ndarray, float]:
+        """Photometric + geometric augmentation. Returns (augmented_img, new_cx).
+
+        Geometric:
+          - Horizontal flip (50%) — cx becomes 1-cx; bw/bh unchanged
+
+        Photometric (applied stochastically):
+          - Brightness/contrast, Gaussian noise, gamma, motion blur
+          - Color jitter (hue/saturation) — critical for gate color generalization
+          - JPEG artifacts (matches real sim UDP stream)
+          - Cutout (2 patches) — forces model to use whole gate shape
+        """
         rng = self._rng
+
+        # Horizontal flip — properly corrects cx label
+        if rng.random() < 0.5:
+            img = img[:, ::-1, :].copy()
+            cx = 1.0 - cx
 
         # Brightness + contrast
         if rng.random() < 0.7:
-            alpha = float(rng.uniform(0.6, 1.4))   # contrast
-            beta  = float(rng.uniform(-40, 40))     # brightness
+            alpha = float(rng.uniform(0.6, 1.4))
+            beta  = float(rng.uniform(-40, 40))
             img = np.clip(img.astype(np.float32) * alpha + beta, 0, 255).astype(np.uint8)
+
+        # Color jitter — most important for gate color generalization
+        if rng.random() < 0.6:
+            hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV).astype(np.float32)
+            hsv[:, :, 0] = (hsv[:, :, 0] + rng.uniform(-20, 20)) % 180
+            hsv[:, :, 1] = np.clip(hsv[:, :, 1] * rng.uniform(0.4, 1.6), 0, 255)
+            img = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2RGB)
 
         # Gaussian noise
         if rng.random() < 0.5:
-            std = float(rng.uniform(3, 20))
+            std = float(rng.uniform(3, 25))
             noise = rng.normal(0, std, img.shape)
             img = np.clip(img.astype(np.float32) + noise, 0, 255).astype(np.uint8)
 
@@ -156,10 +180,37 @@ class GateDataset(Dataset):
                                for i in range(256)], dtype=np.uint8)
             img = cv2.LUT(img, table)
 
-        # Horizontal flip (gate bbox is symmetric so labels stay valid for cx only
-        # if we also flip cx → 1 - cx; skip flip to keep things simple)
+        # Motion blur
+        if rng.random() < 0.3:
+            k = int(rng.choice([3, 5, 7]))
+            direction = int(rng.integers(0, 2))
+            kernel = np.zeros((k, k), dtype=np.float32)
+            if direction == 0:
+                kernel[k // 2, :] = 1.0 / k
+            else:
+                kernel[:, k // 2] = 1.0 / k
+            img = cv2.filter2D(img, -1, kernel)
 
-        return img
+        # JPEG artifacts — sim streams real JPEG frames
+        if rng.random() < 0.4:
+            q = int(rng.integers(40, 85))
+            _, enc = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, q])
+            img = cv2.imdecode(enc, cv2.IMREAD_COLOR)
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+        # Cutout — 1-2 random patches, mean-filled
+        if rng.random() < 0.5:
+            H, W = img.shape[:2]
+            mean_val = img.mean(axis=(0, 1))
+            for _ in range(int(rng.integers(1, 3))):
+                rw = int(rng.uniform(0.05, 0.2) * W)
+                rh = int(rng.uniform(0.05, 0.2) * H)
+                x = int(rng.integers(0, max(1, W - rw)))
+                y = int(rng.integers(0, max(1, H - rh)))
+                img = img.copy()
+                img[y:y + rh, x:x + rw] = mean_val
+
+        return img, cx
 
 
 # ---------------------------------------------------------------------------

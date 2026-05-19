@@ -48,7 +48,9 @@ class MLVisionLobe:
         self._cfg = config
         self._budget_ms = budget_ms
         self._model = None
-        self._device = "cpu"
+        # Auto-select GPU if available — 8GB VRAM on competition machine
+        self._device = "cuda" if (_TORCH_AVAILABLE and
+                                   __import__('torch').cuda.is_available()) else "cpu"
 
         # Stateful (same as VisionLobe)
         self._confidence_ema: float = 0.0
@@ -77,6 +79,7 @@ class MLVisionLobe:
             # Support both raw state_dict and {"model": state_dict} checkpoints
             state = ckpt.get("model", ckpt) if isinstance(ckpt, dict) else ckpt
             self._model.load_state_dict(state)
+            self._model.to(self._device)
             self._model.eval()
         except Exception as e:
             print(f"[MLVisionLobe] failed to load model from {path}: {e}")
@@ -111,13 +114,14 @@ class MLVisionLobe:
         # Resize to model input size
         img_small = cv2.resize(obs.image, (cfg.ml_input_w, cfg.ml_input_h))
 
-        # (H, W, 3) uint8 → (1, 3, H, W) float32 in [0, 1]
+        # (H, W, 3) uint8 → (1, 3, H, W) float32 in [0, 1], on model device
         tensor = (
             torch.from_numpy(img_small)
             .permute(2, 0, 1)
             .unsqueeze(0)
             .float()
             .div(255.0)
+            .to(self._device)
         )
 
         with torch.no_grad():

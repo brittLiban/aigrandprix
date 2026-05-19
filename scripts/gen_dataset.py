@@ -40,8 +40,10 @@ _VISIBLE_AREA_MIN = 400.0
 
 
 def _default_sim_cfg() -> SimConfig:
+    # 360×640 matches the real competition camera (16:9).
+    # Training and deployment are geometrically consistent — no aspect distortion.
     return SimConfig(
-        fps=60, seed=0, resolution=[480, 640], total_gates=10,
+        fps=60, seed=0, resolution=[360, 640], total_gates=10,
         lateral_std=0.25, noise_std=8.0,
         accel_noise_std=0.1, gyro_noise_std=0.02,
         drop_frame_prob=0.0, latency_spike_prob=0.0, max_latency_ms=0.0,

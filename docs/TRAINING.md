@@ -11,6 +11,48 @@ The GateDetector CNN is trained entirely on **synthetic data** generated from th
 
 ---
 
+## ⚡ Competition Retrain (do this now)
+
+The model must be retrained after these improvements:
+- Aspect ratio fixed: 360×640 → 90×160 model input (was 128×160, wrong 4:3 AR)
+- Runtime augmentation enabled (was off — model only saw fixed aug copies)
+- Horizontal flip added to augmentation (proper cx label correction)
+- Color jitter added (gate color generalization)
+- Center-weighted loss (cx/cy 3× more important than bw/bh)
+
+```bat
+REM Step 1: Regenerate dataset at correct 16:9 resolution (≈75K frames each, ~15 min)
+python scripts/gen_dataset.py --seeds 200 --aug-copies 2 --output data/gate_dataset
+python scripts/gen_dataset.py --seeds 200 --aug-copies 2 --output data/gate_dataset_hard --config configs/hard.yaml
+
+REM Step 2: Train — 40 epochs on combined data (~30 min on GPU)
+python scripts/train_detector.py ^
+  --data "data/gate_dataset,data/gate_dataset_hard" ^
+  --epochs 40 ^
+  --batch-size 512 ^
+  --lr 1e-3 ^
+  --input-h 90 ^
+  --input-w 160 ^
+  --bbox-weight 5.0 ^
+  --center-weight 3.0 ^
+  --checkpoint-dir models
+
+REM Step 3: Evaluate
+python scripts/eval_detector.py --model models/gate_detector.pt --data data/gate_dataset
+
+REM Step 4 (after first sim run): Fine-tune on real screenshots
+REM   python scripts/train_detector.py ^
+REM     --data "data/gate_dataset,data/gate_dataset_hard,data/real_sim" ^
+REM     --epochs 10 --lr 5e-4 --resume models/gate_detector.pt
+```
+
+**Expected improvement over old model:**
+- Center MAE: was 0.13 → target < 0.08 (better centering = cleaner gate passes)
+- Off-center passes (>0.20): was 30.4% → target < 15%
+- Gate color generalization: was white-biased → handles any color
+
+---
+
 ## Dataset Generation
 
 ```bash

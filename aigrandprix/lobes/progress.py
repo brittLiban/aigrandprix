@@ -28,9 +28,11 @@ class ProgressLobe:
     @timed("ProgressLobe")
     def __call__(self, obs: Observation, vision: VisionResult,
                  current_state: DroneState, time_in_state: float) -> ProgressResult:
-        # Alignment: gate center offset from image center
-        dx = (vision.cx - 0.5) * 2.0   # [-1, 1], 0 = centered
-        dy = (vision.cy - 0.5) * 2.0
+        # Alignment: gate center offset from image center.
+        # cy_tilt_offset compensates for camera upward tilt: the "centered" gate
+        # appears below image center when the camera points above the horizon.
+        dx = (vision.cx - 0.5) * 2.0
+        dy = (vision.cy - 0.5 - self._cfg.cy_tilt_offset) * 2.0
 
         # Aligned score: 1 = perfectly centered, 0 = at edge
         raw_dist = math.sqrt(dx ** 2 + dy ** 2)
